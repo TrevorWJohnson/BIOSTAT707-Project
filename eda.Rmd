@@ -1,0 +1,122 @@
+---
+title: "Exploratory Data Analysis"
+author: "Haddon, Trevor, Scott"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(patchwork)
+library(cluster)
+library(factoextra)
+```
+
+```{r}
+df <- read_csv("./cancer_mortality_SES.csv")
+```
+
+```{r}
+# separate NaNDA data
+nanda <-
+  df[, grep("^(value|prop|count_tri_facilities)", colnames(df))]
+```
+
+The data has a clean format with no missing data. 
+
+The number of EPA Toxics Release Inventory sites in tract+0.5 mile buffer has a strong positive skewness. Majority of the observations have zero, so we transform the scale on the y-axis.
+
+```{r}
+ggplot(data = nanda, aes(x = count_tri_facilities)) +
+  geom_histogram(bins = 10, color = "gray") +
+  scale_y_log10() +
+  theme_bw() +
+  labs(x = "number of EPA Toxics Release Inventory sites")
+```
+
+
+For each type of land cover in a census tract, the dataset provides two measures: the original area (in square meter) and the proportion of the area. Therefore, we want to investigate if there is a systematic pattern between the raw area and the proportion. We plot the density plots for both measures and calculate the correlation between the measures. Based on the results, we observe that there is no linear relationship between the two measures. It is reasonable to use both types of measures as predictors.
+
+```{r}
+#' Generate density plots for raw area and proportion
+#' 
+#' @param var_id int
+#' @param nanda dataframe
+#' @return patchwork ggplot
+#' @examples
+density_plot <- function(var_id, nanda) {
+  val_p <- ggplot(data = nanda) +
+    geom_density(aes_string(x = paste("value", var_id, sep = "_")), fill = "gray") +
+    labs(x = "Area", title = paste0("Distributions for land cover type ID:", var_id))
+  prop_p <- ggplot(data = nanda) +
+    geom_density(aes_string(x = paste("prop_value", var_id, sep = "_")), fill = "gray") +
+    labs(x = "Proportion area")
+  val_p + prop_p
+}
+```
+
+```{r}
+# get var_ids
+var_ids <-
+  grep("\\d$", colnames(nanda), value = TRUE) %>% # screen thru all column names and get those ends with digits
+  str_split("_") %>% # split each string elem in vector
+  sapply(function(x)
+    # get last elem of for each list elem
+    x[length(x)]) %>%
+  unique() # get the unique id
+
+set.seed(121)
+var_ids.sample <- sample(var_ids, 3)
+```
+
+```{r, fig.width=8}
+p <- density_plot(var_ids.sample[1], nanda)
+for (id in var_ids.sample[-1]) {
+  p <- p / density_plot(id, nanda)
+}
+p & theme_bw()
+```
+
+```{r}
+cors <- c()
+for (id in var_ids) {
+  cors <- append(cors, cor(nanda[paste("value", id, sep = "_")],
+                           nanda[paste("prop_value", id, sep = "_")]))
+}
+tibble(`area type` = var_ids, `correlation` = round(cors, 3)) %>% 
+  t() %>% 
+  kableExtra::kbl(booktabs = TRUE, digits = 3, col.names = NULL) %>% 
+  kableExtra::kable_styling()
+```
+
+```{r}
+nanda.pca <- prcomp(nanda, center = TRUE, scale. = TRUE)
+```
+
+```{r}
+summary(nanda.pca)
+```
+
+
+```{r}
+var_explained_df <- data.frame(
+  PC = seq_len(35),
+  var_explained = (nanda.pca$sdev)^2 / sum((nanda.pca$sdev)^2)
+)
+var_explained_df %>%
+  ggplot(aes(x = PC, y = var_explained, group = 1)) +
+  geom_point(size = 4) +
+  geom_line() +
+  labs(title = "Scree plot: PCA on scaled data", y = "Variance explained")
+```
+
+```{r}
+dim2_nanda <- nanda.pca$x[,c("PC1", "PC2")]
+```
+
+```{r}
+k3 <- kmeans(dim2_nanda, centers = 3, nstart = 25)
+fviz_cluster(k3, data = dim2_nanda, geom="point")
+```
+
+
