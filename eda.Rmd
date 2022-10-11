@@ -131,7 +131,8 @@ fviz_cluster(k1, data = dim2_nanda, geom="point") +
   fviz_cluster(k2, data = dim2_nanda, geom="point") +
   fviz_cluster(k3, data = dim2_nanda, geom="point") +
   plot_annotation(title = "Clustering based on the first two principal components") &
-  theme(legend.position = "bottom")
+  theme(legend.position = "bottom") &
+  labs(title = "") -> p
 ```
 
 
