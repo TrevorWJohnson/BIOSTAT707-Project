@@ -45,10 +45,10 @@ For each type of land cover in a census tract, the dataset provides two measures
 #' @param nanda dataframe
 #' @return patchwork ggplot
 #' @examples
-density_plot <- function(var_id, nanda) {
+density_plot <- function(var_id, nanda, title) {
   val_p <- ggplot(data = nanda) +
     geom_density(aes_string(x = paste("value", var_id, sep = "_")), fill = "gray") +
-    labs(x = "Area", title = paste0("Distributions for land cover type ID:", var_id))
+    labs(x = "Area", title = title)
   prop_p <- ggplot(data = nanda) +
     geom_density(aes_string(x = paste("prop_value", var_id, sep = "_")), fill = "gray") +
     labs(x = "Proportion area")
