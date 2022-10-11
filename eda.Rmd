@@ -10,10 +10,11 @@ library(tidyverse)
 library(patchwork)
 library(cluster)
 library(factoextra)
+library(here)
 ```
 
 ```{r}
-df <- read_csv("./cancer_mortality_SES.csv")
+df <- read_csv(here("Data", "cancer_mortality_SES.csv"))
 ```
 
 ```{r}
