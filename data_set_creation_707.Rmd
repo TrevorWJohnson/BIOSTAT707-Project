@@ -1,0 +1,205 @@
+---
+title: "707_Data_Creation"
+output: html_document
+date: "2022-08-20"
+editor_options: 
+  chunk_output_type: inline
+---
+
+```{r setup, include=FALSE}
+library(tidyverse)
+library(reticulate)
+library(stringr)
+library(tigris)
+library(maps)
+library(usmap)
+library(tmap)
+library(leaflet)
+library(readr)
+
+setwd("C:/Users/hadsa/OneDrive/Documents/Repo/Green Space Project/Data/")
+
+
+
+```
+
+
+## Reading Datasets
+
+Please note our CSV File Names may be different.
+```{r}
+#IHME_USA_COUNTY_CANCER_MORTALITY_RATES_1980_2014_NATIONAL_Y2017M01D24 dataset
+br <- readxl::read_xlsx("~/breast_cancer.xlsx", sheet = "Breast cancer")
+
+#SVI 2014
+svi14 <-  read.csv("~/SVI2014_US.csv")
+
+#SVI 2010
+svi10 <-  read.csv("~/SVI2010_US.csv")
+
+#NaNDA Pollutant Dataset
+pol <- read.csv("~/nanda_pollutst_tract_2000-2018_01P.csv")
+
+#NaNDA Greenspace Dataset
+gs <- read.csv("~/nanda_gs.csv")
+```
+Breast Cancer Data Organization
+
+```{r}
+#Fixing Names
+colnames(br) <- br[1,]
+
+#Deleting Duplicate Name Row and National Row
+br <- br[c(-1,-2),]
+
+
+
+#Removing State Row
+br$FIPS <- as.numeric(br$FIPS)
+
+br <- br %>% filter(
+  FIPS > 100
+)
+
+#Checking
+glimpse(br)
+
+#Filtering for relevant data:
+br <- br %>% 
+  select(Location, FIPS, `Mortality Rate, 2010*`)
+
+#Removing Confidence Intervals
+br$`Mortality Rate, 2010*` <- 
+  substr(br$`Mortality Rate, 2010*`, 1, 5)
+
+#Changing name of Mortality Rate
+colnames(br) <- c("Location", "FIPS", "mx")
+
+#Changing Data Type of Mortality Rate
+br$mx <- as.numeric(br$mx)
+
+#Adding Year Vector
+br$year <- rep(2010, nrow(br))
+```
+
+
+
+## Name Changes
+
+Getting the SVI 2010 colnames to matchup, where appropriate, to the SVI 2014 colnames (for general use sake). Once these are made, we can consolidate the datasets. Note that the Breast Cancer Dataset ("br") needs to be merged with SVI 2010 by county FIPS codes. The SVI 2010 has both county FIPS codes and census tract FIPS codes. Once this merge occurs, the breast cancer mortality can be matched up with the census tract FIPS codes in the NaNDA datasets ("gs" and "pol"). There should be duplicate mortality rates per row since census tracts FIPS codes mark geographic regions nested within County Level FIPS marked areas.
+
+```{r}
+my.names <- vector(length = ncol(svi10))
+
+
+# -----Loops----- 
+
+
+for (i in 1:length(colnames(svi10))){
+ 
+  my.names[i] <- str_replace_all(colnames(svi10)[i], "E_PL_", "EPL_")
+  
+  my.names2 <- my.names
+}
+
+for (i in 1:length(colnames(svi10))){
+ 
+  my.names2[i] <- str_replace_all(my.names2[i], "S_PL_", "SPL_")
+  
+  my.names3 <- my.names2
+}
+
+for (i in 1:length(colnames(svi10))){
+ 
+  my.names3[i] <- str_replace_all(my.names3[i], "R_PL_", "RPL_")
+  
+  my.names4 <- my.names3
+}
+
+for (i in 1:length(colnames(svi10))){
+ 
+  my.names4[i] <- str_replace_all(my.names4[i], "E_P_", "EP_")
+  
+  my.names5 <- my.names4
+}
+
+for (i in 1:length(colnames(svi10))){
+ 
+  my.names5[i] <- str_replace_all(my.names5[i], "M_P_", "MP_")
+  
+  my.names6 <- my.names5
+}
+# -----Remove superfluous values--------
+remove(my.names)
+remove(my.names2)
+remove(my.names3)
+remove(my.names4)
+remove(my.names5)
+
+length(
+  intersect(my.names6, colnames(svi14)
+            )
+  )
+
+intersect(my.names6, colnames(svi14))
+
+# ----The rest-----
+
+colnames(svi10) <- my.names6
+
+remove(my.names6)
+```
+
+
+## Consolidating 
+
+Stacking svi10 (renamed columns) and svi14.
+
+```{r}
+# svi merge and clean work
+svi <- bind_rows(svi10, svi14)
+```
+
+
+Left Joining Cancer Data & Environmental/Socioeconomic data by common counties (FIPS code)
+
+```{r}
+#svi10 work
+
+
+colnames(svi10)[6] <- "STCNTY"
+
+
+#gs work
+gs <- gs %>% filter(year_intp == 2010) 
+
+colnames(gs)[1] <- "FIPS"
+colnames(gs)[2] <- "year"
+
+#br work
+br
+
+colnames(br)[2] <- "STCNTY"
+
+#pol work
+
+pol <- pol %>% filter(year == "2010")
+
+colnames(pol)[1] <- "FIPS"
+
+#merge work
+
+df <- merge(svi10, br, by = "STCNTY")
+
+df <- merge(df, pol, by = "FIPS")
+
+df <- merge(df, gs, by = "FIPS")
+```
+
+```{r}
+environment(remove(pol))
+environment(remove(svi14))
+environment(remove(br))
+environment(remove(svi10))
+environment(remove(svi))
+```
