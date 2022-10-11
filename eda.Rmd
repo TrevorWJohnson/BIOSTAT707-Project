@@ -102,13 +102,21 @@ summary(nanda.pca)
 ```{r}
 var_explained_df <- data.frame(
   PC = seq_len(35),
-  var_explained = (nanda.pca$sdev)^2 / sum((nanda.pca$sdev)^2)
+  var_explained = (nanda.pca$sdev)^2 / sum((nanda.pca$sdev)^2),
+  cumulative = cumsum((nanda.pca$sdev)^2) / sum((nanda.pca$sdev)^2)
 )
-var_explained_df %>%
-  ggplot(aes(x = PC, y = var_explained, group = 1)) +
-  geom_point(size = 4) +
+p1 <- var_explained_df %>%
+  ggplot(aes(x = PC, y = var_explained)) +
+  geom_point(size = 2) +
   geom_line() +
-  labs(title = "Scree plot: PCA on scaled data", y = "Variance explained")
+  labs(y = "Variance explained")
+p2 <- var_explained_df %>%
+  ggplot(aes(x = PC, y = cumulative)) +
+  geom_point(size = 2) +
+  geom_line() +
+  labs(y = "Variance explained")
+p1 + p2 +
+  plot_annotation(title = "Scree plot for PCA of NaNDA variables")
 ```
 
 ```{r}
@@ -116,8 +124,14 @@ dim2_nanda <- nanda.pca$x[,c("PC1", "PC2")]
 ```
 
 ```{r}
+k1 <- kmeans(dim2_nanda, centers = 1, nstart = 25)
+k2 <- kmeans(dim2_nanda, centers = 2, nstart = 25)
 k3 <- kmeans(dim2_nanda, centers = 3, nstart = 25)
-fviz_cluster(k3, data = dim2_nanda, geom="point")
+fviz_cluster(k1, data = dim2_nanda, geom="point") +
+  fviz_cluster(k2, data = dim2_nanda, geom="point") +
+  fviz_cluster(k3, data = dim2_nanda, geom="point") +
+  plot_annotation(title = "Clustering based on the first two principal components") &
+  theme(legend.position = "bottom")
 ```
 
 
