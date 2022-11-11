@@ -1,0 +1,17 @@
+k-Nearest Neighbors 
+
+64682 samples
+   17 predictor
+
+Pre-processing: centered (17), scaled (17) 
+Resampling: Bootstrapped (25 reps) 
+Summary of sample sizes: 64682, 64682, 64682, 64682, 64682, 64682, ... 
+Resampling results across tuning parameters:
+
+  k  RMSE      Rsquared    MAE     
+  5  3.190494  0.09749885  2.399292
+  7  3.089248  0.10910479  2.332707
+  9  3.031247  0.11718237  2.292500
+
+RMSE was used to select the optimal model using the smallest value.
+The final value used for the model was k = 9.
