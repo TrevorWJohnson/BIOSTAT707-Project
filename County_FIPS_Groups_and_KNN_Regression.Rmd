@@ -215,7 +215,7 @@ for (i in 1:length(Groups)) {
     #Set the Working Directory
     setwd(here("KNN_Model_Predictions", Groups[i]))
     
-    
+   
     
     #Call the Sink Function for the Model Output
     sink(file = paste("Model_Output_", Group, ".txt", sep = ""))
@@ -410,4 +410,7 @@ for (i in 1:length(Groups)) {
     )
   )
 }
+
+mean(Model_Metrics$MSE)
+mean(Model_Metrics$R_Squared)
 ```
