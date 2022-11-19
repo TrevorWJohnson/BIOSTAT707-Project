@@ -4,7 +4,7 @@ library(olsrr)
 setwd("../Desktop/Duke Univeristy MB Program/BIOSTAT 707/BIOSTAT707-Project/")
 
 df <- read.csv("./Data/df_classes.csv")
-# drop index, FIPS, State, Year
+# drop index, FIPS, State, Year, redundant labels
 df <- df %>% select(-FIPS, -State, -Year, -County, -forest, -dev)
 df_summarized <- df %>% 
   group_by(County.FIPS) %>% 
@@ -43,10 +43,10 @@ prep_fixed_data <- function(df) {
 # 
 ## --- --- --- --- --- --- --- --- --- --- --- --- --- 
 
-df_summary <- prep_fixed_data(df)
-print(dim(df_summary))
-fixed_lm <- lm(Mortality ~ ., data = df_summary)
-stepwise <- ols_step_both_p(fixed_lm, pent = 0.05, prem = 0.05)
+# df_summary <- prep_fixed_data(df)
+# print(dim(df_summary))
+# fixed_lm <- lm(Mortality ~ ., data = df_summary)
+# stepwise <- ols_step_both_p(fixed_lm, pent = 0.05, prem = 0.05)
 
 ## Truncated data ----------------------
 # select variables for data reduction
