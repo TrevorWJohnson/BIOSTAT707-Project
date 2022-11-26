@@ -1,3 +1,16 @@
+prep_data <- function(df) {
+  df <- df %>% select(-FIPS, -State, -Year, -County, -forest, -dev)
+  df$Forest.Classes..FIXED. <- as.factor(df$Forest.Classes..FIXED.)
+  df$Development.Classes..FIXED. <- as.factor(df$Development.Classes..FIXED.)
+  out <- cbind(df$County.FIPS,
+               df$Mortality,
+               as.data.frame(model.matrix(Mortality ~ 0 + . - County.FIPS, data = df))
+  )
+  colnames(out)[1:2] <- c("County.FIPS", "Mortality")
+  return(out)
+}
+
+
 #' train test split at county level
 #'
 #' @param df with "County.FIPS" variable
@@ -13,20 +26,6 @@ train_test_split <- function(df, frac = 0.8) {
               test = df[df$County.FIPS %in% test_county_fips, ]))
 }
 
-#' plot training history of the XgBoost CV
-#' 
-#' @param
-#' @param
-#' @return
-#' @examples
-xgb_plot_training <- function(hist) {
-  plot(hist$iter, hist$train_rmse_mean, col = "blue", "l",
-       xlab = "iter", ylab = "RMSE")
-  lines(hist$iter, hist$test_rmse_mean, col = "orange")
-  legend("topright", legend=c("train", "test"),
-         col=c("blue", "orange"), lty=c(1,1))
-}
-
 #' standardize train test features
 #' 
 #' @train
@@ -34,12 +33,8 @@ xgb_plot_training <- function(hist) {
 #' @return list of standardized data
 #' @examples
 standardize_train_test_features <- function(train, test) {
-  train_x <- train %>% select(-County.FIPS, -Mortality) %>% 
-    mutate(Forest.Classes..FIXED. = as.factor(Forest.Classes..FIXED.),
-           Development.Classes..FIXED. = as.factor(Development.Classes..FIXED.))
-  test_x <- test %>% select(-County.FIPS, -Mortality) %>% 
-    mutate(Forest.Classes..FIXED. = as.factor(Forest.Classes..FIXED.),
-           Development.Classes..FIXED. = as.factor(Development.Classes..FIXED.))
+  train_x <- train %>% select(-County.FIPS, -Mortality)
+  test_x <- test %>% select(-County.FIPS, -Mortality)
   train_sd <- train_x %>% select_if(is.numeric) %>% sapply(sd)
   train_mean <- train_x %>% select_if(is.numeric) %>% sapply(mean)
   num_cols <- which(sapply(train_x, is.numeric))
@@ -52,4 +47,16 @@ standardize_train_test_features <- function(train, test) {
 }
 
 
-
+#' plot training history of the XgBoost CV
+#' 
+#' @param
+#' @param
+#' @return
+#' @examples
+xgb_plot_training <- function(hist) {
+  plot(hist$iter, hist$train_rmse_mean, col = "blue", "l",
+       xlab = "iter", ylab = "RMSE")
+  lines(hist$iter, hist$test_rmse_mean, col = "orange")
+  legend("topright", legend=c("train", "valid"),
+         col=c("blue", "orange"), lty=c(1,1))
+}
