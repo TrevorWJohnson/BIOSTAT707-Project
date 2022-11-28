@@ -1,0 +1,2188 @@
+---
+title: "BIOSTAT 707 Project: County FIPS Groups and KNN Regression"
+output: html_document
+---
+
+```{r Initial Setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+#Load the Needed Libraries
+library(tidyverse)
+library(here)
+library(caret)
+library(boot)
+
+#Clear the Environment
+rm(list = ls())
+
+#Ensure Directory is Set Properly
+if(file.exists(paste(getwd(), "/.here", sep = "")) == FALSE) {
+  #Create the .here file
+  set_here()
+  
+  #Reboot R
+  .rs.restartR()
+}
+
+#Clear the Console
+cat("\014")
+```
+
+
+
+```{r Data Processing}
+#Check to Determine if this Process has already been Completed
+if (file.exists(here("Data", "df_with_County_Groups.csv")) == FALSE) {
+  #Import the Analytic Data
+  Analytic_Data <-
+    read.csv(here("Data", "df_classes.csv"))
+  
+  #Set a Seed for Reproducibility
+  set.seed(15)
+  
+  #Randomly Order all of the County FIPS and Place in Data Frame
+  Groups_Data <-
+    data.frame(sample(
+      unique(Analytic_Data$County.FIPS),
+      length(unique(Analytic_Data$County.FIPS)),
+      replace = FALSE
+    ))
+  
+  #Assign Group to County FIPS based on the Row Number
+  for (i in 1:nrow(Groups_Data)) {
+    if (i <= round(nrow(Groups_Data) / 10)) {
+      Groups_Data[i, 2] <- "Group_01"
+    } else
+      if (i <= 2 * round(nrow(Groups_Data) / 10)) {
+        Groups_Data[i, 2] <- "Group_02"
+      } else
+        if (i <= 3 * round(nrow(Groups_Data) / 10)) {
+          Groups_Data[i, 2] <- "Group_03"
+        } else
+          if (i <= 4 * round(nrow(Groups_Data) / 10)) {
+            Groups_Data[i, 2] <- "Group_04"
+          } else
+            if (i <= 5 * round(nrow(Groups_Data) / 10)) {
+              Groups_Data[i, 2] <- "Group_05"
+            } else
+              if (i <= 6 * round(nrow(Groups_Data) / 10)) {
+                Groups_Data[i, 2] <- "Group_06"
+              } else
+                if (i <= 7 * round(nrow(Groups_Data) / 10)) {
+                  Groups_Data[i, 2] <- "Group_07"
+                } else
+                  if (i <= 8 * round(nrow(Groups_Data) / 10)) {
+                    Groups_Data[i, 2] <- "Group_08"
+                  } else
+                    if (i <= 9 * round(nrow(Groups_Data) / 10)) {
+                      Groups_Data[i, 2] <- "Group_09"
+                    } else
+                    {
+                      Groups_Data[i, 2] <- "Group_10"
+                    }
+  }
+  
+  #Set Column Names
+  colnames(Groups_Data) <- c("County.FIPS", "County.FIPS.Group")
+  
+  #Check the Number of Group Assignments
+  table(Groups_Data[, 2])
+  
+  #Create New Column in Analytic Data
+  Analytic_Data$County.FIPS.Group <- NA
+  
+  #Add Assignments to Analytic Data
+  for (i in 1:nrow(Analytic_Data)) {
+    for (j in 1:nrow(Groups_Data)) {
+      if (Analytic_Data$County.FIPS[i] == Groups_Data$County.FIPS[j]) {
+        Analytic_Data$County.FIPS.Group[i] = Groups_Data$County.FIPS.Group[j]
+      }
+    }
+    
+    #Progress Tracker
+    if ((i / 100) == round(i / 100)) {
+      #Clear Console
+      cat("\014")
+      
+      #Print Percent Complete
+      print(paste(round((
+        i / nrow(Analytic_Data) * 100
+      ), 4), "% Complete", sep = ""))
+    }
+    
+    #Completion Indicator
+    if (i == nrow(Analytic_Data)) {
+      #Clear Console
+      cat("\014")
+      
+      #Print Done
+      print("100% Complete - Done!")
+    }
+  }
+} else {
+  Analytic_Data <- read.csv(here("Data", "df_with_County_Groups.csv"))
+  
+  print("Downloaded Analytic Data with County Groups from Git Hub")
+}
+
+#Show Data Summary Indicating County FIPS Assignment and the Number of Entries
+#for each County
+table(Analytic_Data$County.FIPS,
+      Analytic_Data$County.FIPS.Group)
+
+#Check the Number of Observations in each Group
+table(Analytic_Data$County.FIPS.Group)
+
+#Overwrite Indicator
+Overwrite <- FALSE
+
+#Export Data
+if (file.exists(here("Data", "df_with_County_Groups.csv")) == FALSE |
+    Overwrite == TRUE) {
+  #Create an Indicator to Determine if an Overwrite is Performed
+  if (file.exists(here("Data", "df_with_County_Groups.csv")) == TRUE &
+      Overwrite == TRUE) {
+    Overwrite_Necessary <- TRUE
+  } else {
+    Overwrite_Necessary <- FALSE
+  }
+  
+  #Write the Analytic_Data to a .csv File
+  write.csv(
+    Analytic_Data,
+    file = here("Data", "df_with_County_Groups.csv"),
+    row.names = FALSE
+  )
+  
+  #Print a Message Describing the Operation Outcome
+  if (Overwrite_Necessary == FALSE) {
+    print("Saved Analytic_Data as df_with_County_Groups.csv")
+  } else {
+    print("Overwrote df_with_County_Groups.csv")
+  }
+} else {
+  print("File Exists and Overwrite = FALSE, Data Export Halted")
+}
+```
+
+
+
+
+# CV-CV KNN Regressions
+
+
+## Raw Data, Proportions, Latent Classes, and Polution Sites
+
+```{r KNN for Raw Data Proportions Latent Classes and Polution Sites}
+#Subset the Needed Columns from the Analytic Data to Perform KNN Regression
+Working_Data <- Analytic_Data[, c(6, 7, 8:24, 25:41, 44:45, 46)]
+
+
+#Create a List of the Groups
+Groups <-
+  unique(Analytic_Data$County.FIPS.Group)[
+    order(unique(Analytic_Data$County.FIPS.Group))]
+
+#Create Directory for Model Predictions if Needed
+if (dir.exists(here("KNN_Model_Predictions")) == FALSE) {
+  dir.create(here("KNN_Model_Predictions"))
+}
+
+if (dir.exists(
+  here("KNN_Model_Predictions", 
+       "Raw_Data+Proportions+Latent_Classes+Polution_Sites")) == FALSE) {
+  dir.create(
+    here("KNN_Model_Predictions", 
+         "Raw_Data+Proportions+Latent_Classes+Polution_Sites"))
+}
+
+
+
+#Cycle All Groups
+for (i in 1:length(Groups)) {
+  
+  #Create Directory to Store Results if Needed
+  if (dir.exists(
+    here("KNN_Model_Predictions", 
+         "Raw_Data+Proportions+Latent_Classes+Polution_Sites",
+                      Groups[i])) == FALSE) {
+    dir.create(
+      here("KNN_Model_Predictions", 
+           "Raw_Data+Proportions+Latent_Classes+Polution_Sites",
+                    Groups[i]))
+  }
+  
+  #Set the Group ID
+  Group <- Groups[i]
+  
+  if (file.exists(here(
+    "KNN_Model_Predictions",
+    "Raw_Data+Proportions+Latent_Classes+Polution_Sites",
+    Groups[i],
+    paste("Model_Output_", Group, ".txt", sep = ""))) == FALSE) {
+    
+    #Subset the Test Set, Features, and Response Values
+    Test <-
+      Working_Data[Working_Data$County.FIPS.Group == Group, -39]
+    
+    Test_Features <- subset(Test, select = -c(Mortality))
+
+    Test_Response <- subset(Test, select = Mortality)[, 1]
+    
+    #Subset the Training Set
+    Training <-
+      Working_Data[Working_Data$County.FIPS.Group != Group, -39]
+    
+    #Perform the KNN Regression
+    Model <- train(
+      Mortality ~ .,
+      data = Training,
+      tuneGrid = expand.grid(k = c(1, seq(5, 50, by = 5))),
+      trControl = trainControl(method = "cv", number = 10),
+      method = "knn",
+      preProcess = c("center", "scale"))
+    
+    #Set the Working Directory
+    setwd(here("KNN_Model_Predictions", 
+               "Raw_Data+Proportions+Latent_Classes+Polution_Sites", 
+               Groups[i]))
+    
+   
+    
+    #Call the Sink Function for the Model Output
+    sink(file = paste("Model_Output_", Group, ".txt", sep = ""))
+    
+    #Print the Model Output
+    print(Model)
+    
+    #End the Sink Function
+    sink()
+    
+    
+    
+    #Call the PDF Function
+    pdf(file = paste("Model_Plot_", Group, ".pdf", sep = ""))
+    
+    #Plot the Model Output
+    print(plot(Model))
+    
+    #End the PDF Function
+    dev.off()
+    
+    
+    
+    #Calculate Predictions for Test Set
+    Test$Group <- Group
+    Test$Predictions <- predict(Model, newdata = Test_Features)
+    
+    #Save the Test Set
+    write.csv(
+      Test,
+      file = here(
+        "KNN_Model_Predictions",
+        "Raw_Data+Proportions+Latent_Classes+Polution_Sites",
+        Groups[i],
+        paste("Test_Data_and_Predictions_", Group, ".csv", sep = "")),
+      row.names = FALSE)
+    
+    
+    
+    #Add Group to the Training Data
+    Training$Group <- Group
+    
+    #Save the Training Set
+    write.csv(
+      Training,
+      file = here(
+        "KNN_Model_Predictions",
+        "Raw_Data+Proportions+Latent_Classes+Polution_Sites",
+        Groups[i],
+        paste("Training_Data_", Group, ".csv", sep = "")),
+      row.names = FALSE)
+    
+    #Calculate Model Fit Metrics
+    Metrics <- data.frame(Group = Group,
+                          K = Model$bestTune,
+                          RMSE = sqrt(mean((Test_Response - 
+                                              Test$Predictions) ^ 2)),
+                          R_Squared = cor(Test_Response, 
+                                          Test$Predictions) ^ 2)
+    
+    #Save the Metrics
+    write.csv(
+      Metrics,
+      file = here(
+        "KNN_Model_Predictions",
+        "Raw_Data+Proportions+Latent_Classes+Polution_Sites",
+        Groups[i],
+        paste("Model_Metrics_", Group, ".csv", sep = "")),
+      row.names = FALSE)
+
+
+    
+    #Reset the Working Directory
+    setwd(here())
+    
+    
+    
+    #Create Model Metrics Summary if it Doesn't Exist
+    if (exists("Model_Metrics") == FALSE) {
+      Model_Metrics <-
+        read_csv(here(
+          "KNN_Model_Predictions",
+          "Raw_Data+Proportions+Latent_Classes+Polution_Sites",
+          Groups[i],
+          paste("Model_Metrics_", Group, ".csv", sep = "")))
+      
+    } else {
+      #Row Bind New Model Metrics in if Model Metrics Exists
+      Model_Metrics <- rbind(Model_Metrics, read_csv(here(
+        "KNN_Model_Predictions",
+        "Raw_Data+Proportions+Latent_Classes+Polution_Sites",
+        Groups[i],
+        paste("Model_Metrics_", Group, ".csv", sep = ""))))
+    }
+      
+  } else {
+  #If the Model Results alredy Exist  
+    #Create Model Metrics Summary in R if it Doesn't Exist
+    if (exists("Model_Metrics") == FALSE) {
+      Model_Metrics <-
+        read_csv(here(
+          "KNN_Model_Predictions",
+          "Raw_Data+Proportions+Latent_Classes+Polution_Sites",
+          Groups[i],
+          paste("Model_Metrics_", Group, ".csv", sep = "")))
+      
+    } else {
+      #Row Bind New Model Metrics in if Model Metrics Exists in R
+      Model_Metrics <- rbind(Model_Metrics, read_csv(here(
+        "KNN_Model_Predictions",
+        "Raw_Data+Proportions+Latent_Classes+Polution_Sites",
+        Groups[i],
+        paste("Model_Metrics_", Group, ".csv", sep = ""))))
+    }
+  }
+}
+
+#Save the Metrics Summary
+write.csv(
+  Model_Metrics,
+  file = here(
+    "KNN_Model_Predictions",
+    "Raw_Data+Proportions+Latent_Classes+Polution_Sites",
+    paste("Model_Metrics_Summary.csv", sep = "")),
+  row.names = FALSE)
+```
+
+
+
+```{r Plots for Raw Data Proportions Latent Classes and Polution Sites, message = FALSE}
+#Create Directory for Model Plots
+if (dir.exists(
+  here("KNN_Model_Predictions", 
+       "Raw_Data+Proportions+Latent_Classes+Polution_Sites", "Plots")) == 
+    FALSE) {
+  dir.create(
+    here("KNN_Model_Predictions", 
+         "Raw_Data+Proportions+Latent_Classes+Polution_Sites", "Plots"))
+}
+
+#Cycle All Groups
+for (i in 1:length(Groups)) {
+  #Set the Group ID
+  Interest_Group <- Groups[i]
+  
+  #Plot True and Predicted Values for Group_05
+  Plot_Data <- read_csv(
+    here(
+      "KNN_Model_Predictions",
+      "Raw_Data+Proportions+Latent_Classes+Polution_Sites",
+      Interest_Group,
+      paste("Test_Data_and_Predictions_", Interest_Group, ".csv",
+            sep = "")))
+  
+  #Order the Data by Mortality
+  Plot_Data <- Plot_Data[order(Plot_Data$Mortality),]
+  
+  #Create Column to Fill with Values
+  Plot_Data$Order <- NA
+  
+  #Add Column of Row Names
+  for (i in 1:nrow(Plot_Data)) {
+    Plot_Data$Order[i] <- i
+  }
+  
+  #Create Plot Showing Predictions with Real Values
+  print(
+    ggplot(data = Plot_Data,
+           aes(x = Order)) +
+      
+      #Plot Predictions
+      geom_point(
+        aes(y = Predictions),
+        shape = 21,
+        color = "cornflowerblue",
+        size = 0.5) +
+      
+      #Plot Real Values
+      geom_point(aes(y = Mortality),
+                 size = 0.5) +
+      
+      #Add Axis Labels
+      xlab("Data for Inticated Test Group Ordered by Increasing Observed Mortality") +
+      ylab("Mortality") +
+      
+      #Add Title
+      labs(
+        title = paste(
+          "Plot of Observed and Predicted Mortality for ",
+          Interest_Group,
+          " as the Test Set",
+          sep = ""),
+        
+        subtitle = paste(
+          "RMSE = ",
+          round(Model_Metrics$RMSE[which(Model_Metrics$Group == 
+                                               Interest_Group)], 4),
+          "     R-Squared = ",
+          round(Model_Metrics$R_Squared[which(Model_Metrics$Group == 
+                                                Interest_Group)], 4),
+          sep = "")))
+  
+  #Save the Plot
+  ggsave(
+    path = here("KNN_Model_Predictions", 
+                "Raw_Data+Proportions+Latent_Classes+Polution_Sites", 
+                "Plots"),
+    filename = paste(
+      "Plot_of_Observed_and_Predicted_Mortality_for_",
+      Interest_Group,
+      ".jpg",
+      sep = ""
+    )
+  )
+}
+
+#Clear Model Metrics
+rm(Model_Metrics)
+```
+
+
+
+## Raw Data, Latent Classes, and Pollution Sites
+
+
+
+```{r KNN for Raw Data Latent Classes and Pollution Sites}
+#Subset the Needed Columns from the Analytic Data to Perform KNN Regression
+Working_Data <- Analytic_Data[, c(6, 7, 25:41, 44:45, 46)]
+
+
+#Create a List of the Groups
+Groups <-
+  unique(Analytic_Data$County.FIPS.Group)[
+    order(unique(Analytic_Data$County.FIPS.Group))]
+
+#Create Directory for Model Predictions if Needed
+if (dir.exists(here("KNN_Model_Predictions")) == FALSE) {
+  dir.create(here("KNN_Model_Predictions"))
+}
+
+if (dir.exists(here("KNN_Model_Predictions", "Raw_Data+Latent_Classes+Polution_Sites")) == FALSE) {
+  dir.create(here("KNN_Model_Predictions", "Raw_Data+Latent_Classes+Polution_Sites"))
+}
+
+
+
+#Cycle All Groups
+for (i in 1:length(Groups)) {
+  
+  #Create Directory to Store Results if Needed
+  if (dir.exists(here("KNN_Model_Predictions", "Raw_Data+Latent_Classes+Polution_Sites",
+                      Groups[i])) == FALSE) {
+    dir.create(here("KNN_Model_Predictions", "Raw_Data+Latent_Classes+Polution_Sites",
+                    Groups[i]))
+  }
+  
+  #Set the Group ID
+  Group <- Groups[i]
+  
+  if (file.exists(here(
+    "KNN_Model_Predictions",
+    "Raw_Data+Latent_Classes+Polution_Sites",
+    Groups[i],
+    paste("Model_Output_", Group, ".txt", sep = ""))) == FALSE) {
+    
+    #Subset the Test Set, Features, and Response Values
+    Test <-
+      Working_Data[Working_Data$County.FIPS.Group == Group, -22]
+    
+    Test_Features <- subset(Test, select = -c(Mortality))
+
+    Test_Response <- subset(Test, select = Mortality)[, 1]
+    
+    #Subset the Training Set
+    Training <-
+      Working_Data[Working_Data$County.FIPS.Group != Group, -22]
+    
+    #Perform the KNN Regression
+    Model <- train(
+      Mortality ~ .,
+      data = Training,
+      tuneGrid = expand.grid(k = c(1, seq(5, 50, by = 5))),
+      trControl = trainControl(method = "cv", number = 10),
+      method = "knn",
+      preProcess = c("center", "scale"))
+    
+    #Set the Working Directory
+    setwd(here("KNN_Model_Predictions", "Raw_Data+Latent_Classes+Polution_Sites", Groups[i]))
+    
+   
+    
+    #Call the Sink Function for the Model Output
+    sink(file = paste("Model_Output_", Group, ".txt", sep = ""))
+    
+    #Print the Model Output
+    print(Model)
+    
+    #End the Sink Function
+    sink()
+    
+    
+    
+    #Call the PDF Function
+    pdf(file = paste("Model_Plot_", Group, ".pdf", sep = ""))
+    
+    #Plot the Model Output
+    print(plot(Model))
+    
+    #End the PDF Function
+    dev.off()
+    
+    
+    
+    #Calculate Predictions for Test Set
+    Test$Group <- Group
+    Test$Predictions <- predict(Model, newdata = Test_Features)
+    
+    #Save the Test Set
+    write.csv(
+      Test,
+      file = here(
+        "KNN_Model_Predictions",
+        "Raw_Data+Latent_Classes+Polution_Sites",
+        Groups[i],
+        paste("Test_Data_and_Predictions_", Group, ".csv", sep = "")),
+      row.names = FALSE)
+    
+    
+    
+    #Add Group to the Training Data
+    Training$Group <- Group
+    
+    #Save the Training Set
+    write.csv(
+      Training,
+      file = here(
+        "KNN_Model_Predictions",
+        "Raw_Data+Latent_Classes+Polution_Sites",
+        Groups[i],
+        paste("Training_Data_", Group, ".csv", sep = "")),
+      row.names = FALSE)
+    
+    #Calculate Model Fit Metrics
+    Metrics <- data.frame(Group = Group,
+                          K = Model$bestTune,
+                          RMSE = sqrt(mean((Test_Response - Test$Predictions) ^ 2)),
+                          R_Squared = cor(Test_Response, Test$Predictions) ^ 2)
+    
+    #Save the Metrics
+    write.csv(
+      Metrics,
+      file = here(
+        "KNN_Model_Predictions",
+        "Raw_Data+Latent_Classes+Polution_Sites",
+        Groups[i],
+        paste("Model_Metrics_", Group, ".csv", sep = "")),
+      row.names = FALSE)
+
+
+    
+    #Reset the Working Directory
+    setwd(here())
+    
+    
+    
+    #Create Model Metrics Summary if it Doesn't Exist
+    if (exists("Model_Metrics") == FALSE) {
+      Model_Metrics <-
+        read_csv(here(
+          "KNN_Model_Predictions",
+          "Raw_Data+Latent_Classes+Polution_Sites",
+          Groups[i],
+          paste("Model_Metrics_", Group, ".csv", sep = "")))
+      
+    } else {
+      #Row Bind New Model Metrics in if Model Metrics Exists
+      Model_Metrics <- rbind(Model_Metrics, read_csv(here(
+        "KNN_Model_Predictions",
+        "Raw_Data+Latent_Classes+Polution_Sites",
+        Groups[i],
+        paste("Model_Metrics_", Group, ".csv", sep = ""))))
+    }
+      
+  } else {
+  #If the Model Results alredy Exist  
+    #Create Model Metrics Summary in R if it Doesn't Exist
+    if (exists("Model_Metrics") == FALSE) {
+      Model_Metrics <-
+        read_csv(here(
+          "KNN_Model_Predictions",
+          "Raw_Data+Latent_Classes+Polution_Sites",
+          Groups[i],
+          paste("Model_Metrics_", Group, ".csv", sep = "")))
+      
+    } else {
+      #Row Bind New Model Metrics in if Model Metrics Exists in R
+      Model_Metrics <- rbind(Model_Metrics, read_csv(here(
+        "KNN_Model_Predictions",
+        "Raw_Data+Latent_Classes+Polution_Sites",
+        Groups[i],
+        paste("Model_Metrics_", Group, ".csv", sep = ""))))
+    }
+  }
+}
+
+#Save the Metrics Summary
+write.csv(
+  Model_Metrics,
+  file = here(
+    "KNN_Model_Predictions",
+    "Raw_Data+Latent_Classes+Polution_Sites",
+    paste("Model_Metrics_Summary.csv", sep = "")),
+  row.names = FALSE)
+```
+
+
+
+```{r Plots for Raw Data Latent Classes and Pollution Sites, message = FALSE}
+#Create Directory for Model Plots
+if (dir.exists(here("KNN_Model_Predictions", "Raw_Data+Latent_Classes+Polution_Sites", "Plots")) == 
+    FALSE) {
+  dir.create(here("KNN_Model_Predictions", "Raw_Data+Latent_Classes+Polution_Sites", "Plots"))
+}
+
+#Cycle All Groups
+for (i in 1:length(Groups)) {
+  #Set the Group ID
+  Interest_Group <- Groups[i]
+  
+  #Plot True and Predicted Values for Group_05
+  Plot_Data <- read_csv(
+    here(
+      "KNN_Model_Predictions",
+      "Raw_Data+Latent_Classes+Polution_Sites",
+      Interest_Group,
+      paste("Test_Data_and_Predictions_", Interest_Group, ".csv",
+            sep = "")))
+  
+  #Order the Data by Mortality
+  Plot_Data <- Plot_Data[order(Plot_Data$Mortality),]
+  
+  #Create Column to Fill with Values
+  Plot_Data$Order <- NA
+  
+  #Add Column of Row Names
+  for (i in 1:nrow(Plot_Data)) {
+    Plot_Data$Order[i] <- i
+  }
+  
+  #Create Plot Showing Predictions with Real Values
+  print(
+    ggplot(data = Plot_Data,
+           aes(x = Order)) +
+      
+      #Plot Predictions
+      geom_point(
+        aes(y = Predictions),
+        shape = 21,
+        color = "cornflowerblue",
+        size = 0.5) +
+      
+      #Plot Real Values
+      geom_point(aes(y = Mortality),
+                 size = 0.5) +
+      
+      #Add Axis Labels
+      xlab("Data for Inticated Test Group Ordered by Increasing Observed Mortality") +
+      ylab("Mortality") +
+      
+      #Add Title
+      labs(
+        title = paste(
+          "Plot of Observed and Predicted Mortality for ",
+          Interest_Group,
+          " as the Test Set",
+          sep = ""),
+        
+        subtitle = paste(
+          "RMSE = ",
+          round(Model_Metrics$RMSE[which(Model_Metrics$Group == 
+                                               Interest_Group)], 4),
+          "     R-Squared = ",
+          round(Model_Metrics$R_Squared[which(Model_Metrics$Group == 
+                                                Interest_Group)], 4),
+          sep = "")))
+  
+  #Save the Plot
+  ggsave(
+    path = here("KNN_Model_Predictions", "Raw_Data+Latent_Classes+Polution_Sites", "Plots"),
+    filename = paste(
+      "Plot_of_Observed_and_Predicted_Mortality_for_",
+      Interest_Group,
+      ".jpg",
+      sep = ""
+    )
+  )
+}
+
+#Clear Model Metrics
+rm(Model_Metrics)
+```
+
+
+
+## Proportions, Latent Classes, and Pollution Sites
+
+
+
+```{r KNN for Proportions Latent Classes and Pollution Sites}
+#Subset the Needed Columns from the Analytic Data to Perform KNN Regression
+Working_Data <- Analytic_Data[, c(6, 7, 8:24, 44:45, 46)]
+
+
+#Create a List of the Groups
+Groups <-
+  unique(Analytic_Data$County.FIPS.Group)[
+    order(unique(Analytic_Data$County.FIPS.Group))]
+
+#Create Directory for Model Predictions if Needed
+if (dir.exists(here("KNN_Model_Predictions")) == FALSE) {
+  dir.create(here("KNN_Model_Predictions"))
+}
+
+if (dir.exists(here("KNN_Model_Predictions", "Proportions+Latent_Classes+Polution_Sites")) == FALSE) {
+  dir.create(here("KNN_Model_Predictions", "Proportions+Latent_Classes+Polution_Sites"))
+}
+
+
+
+#Cycle All Groups
+for (i in 1:length(Groups)) {
+  
+  #Create Directory to Store Results if Needed
+  if (dir.exists(here("KNN_Model_Predictions", "Proportions+Latent_Classes+Polution_Sites",
+                      Groups[i])) == FALSE) {
+    dir.create(here("KNN_Model_Predictions", "Proportions+Latent_Classes+Polution_Sites",
+                    Groups[i]))
+  }
+  
+  #Set the Group ID
+  Group <- Groups[i]
+  
+  if (file.exists(here(
+    "KNN_Model_Predictions",
+    "Proportions+Latent_Classes+Polution_Sites",
+    Groups[i],
+    paste("Model_Output_", Group, ".txt", sep = ""))) == FALSE) {
+    
+    #Subset the Test Set, Features, and Response Values
+    Test <-
+      Working_Data[Working_Data$County.FIPS.Group == Group, -22]
+    
+    Test_Features <- subset(Test, select = -c(Mortality))
+
+    Test_Response <- subset(Test, select = Mortality)[, 1]
+    
+    #Subset the Training Set
+    Training <-
+      Working_Data[Working_Data$County.FIPS.Group != Group, -22]
+    
+    #Perform the KNN Regression
+    Model <- train(
+      Mortality ~ .,
+      data = Training,
+      tuneGrid = expand.grid(k = c(1, seq(5, 50, by = 5))),
+      trControl = trainControl(method = "cv", number = 10),
+      method = "knn",
+      preProcess = c("center", "scale"))
+    
+    #Set the Working Directory
+    setwd(here("KNN_Model_Predictions", "Proportions+Latent_Classes+Polution_Sites", Groups[i]))
+    
+   
+    
+    #Call the Sink Function for the Model Output
+    sink(file = paste("Model_Output_", Group, ".txt", sep = ""))
+    
+    #Print the Model Output
+    print(Model)
+    
+    #End the Sink Function
+    sink()
+    
+    
+    
+    #Call the PDF Function
+    pdf(file = paste("Model_Plot_", Group, ".pdf", sep = ""))
+    
+    #Plot the Model Output
+    print(plot(Model))
+    
+    #End the PDF Function
+    dev.off()
+    
+    
+    
+    #Calculate Predictions for Test Set
+    Test$Group <- Group
+    Test$Predictions <- predict(Model, newdata = Test_Features)
+    
+    #Save the Test Set
+    write.csv(
+      Test,
+      file = here(
+        "KNN_Model_Predictions",
+        "Proportions+Latent_Classes+Polution_Sites",
+        Groups[i],
+        paste("Test_Data_and_Predictions_", Group, ".csv", sep = "")),
+      row.names = FALSE)
+    
+    
+    
+    #Add Group to the Training Data
+    Training$Group <- Group
+    
+    #Save the Training Set
+    write.csv(
+      Training,
+      file = here(
+        "KNN_Model_Predictions",
+        "Proportions+Latent_Classes+Polution_Sites",
+        Groups[i],
+        paste("Training_Data_", Group, ".csv", sep = "")),
+      row.names = FALSE)
+    
+    #Calculate Model Fit Metrics
+    Metrics <- data.frame(Group = Group,
+                          K = Model$bestTune,
+                          RMSE = sqrt(mean((Test_Response - Test$Predictions) ^ 2)),
+                          R_Squared = cor(Test_Response, Test$Predictions) ^ 2)
+    
+    #Save the Metrics
+    write.csv(
+      Metrics,
+      file = here(
+        "KNN_Model_Predictions",
+        "Proportions+Latent_Classes+Polution_Sites",
+        Groups[i],
+        paste("Model_Metrics_", Group, ".csv", sep = "")),
+      row.names = FALSE)
+
+
+    
+    #Reset the Working Directory
+    setwd(here())
+    
+    
+    
+    #Create Model Metrics Summary if it Doesn't Exist
+    if (exists("Model_Metrics") == FALSE) {
+      Model_Metrics <-
+        read_csv(here(
+          "KNN_Model_Predictions",
+          "Proportions+Latent_Classes+Polution_Sites",
+          Groups[i],
+          paste("Model_Metrics_", Group, ".csv", sep = "")))
+      
+    } else {
+      #Row Bind New Model Metrics in if Model Metrics Exists
+      Model_Metrics <- rbind(Model_Metrics, read_csv(here(
+        "KNN_Model_Predictions",
+        "Proportions+Latent_Classes+Polution_Sites",
+        Groups[i],
+        paste("Model_Metrics_", Group, ".csv", sep = ""))))
+    }
+      
+  } else {
+  #If the Model Results alredy Exist  
+    #Create Model Metrics Summary in R if it Doesn't Exist
+    if (exists("Model_Metrics") == FALSE) {
+      Model_Metrics <-
+        read_csv(here(
+          "KNN_Model_Predictions",
+          "Proportions+Latent_Classes+Polution_Sites",
+          Groups[i],
+          paste("Model_Metrics_", Group, ".csv", sep = "")))
+      
+    } else {
+      #Row Bind New Model Metrics in if Model Metrics Exists in R
+      Model_Metrics <- rbind(Model_Metrics, read_csv(here(
+        "KNN_Model_Predictions",
+        "Proportions+Latent_Classes+Polution_Sites",
+        Groups[i],
+        paste("Model_Metrics_", Group, ".csv", sep = ""))))
+    }
+  }
+}
+
+#Save the Metrics Summary
+write.csv(
+  Model_Metrics,
+  file = here(
+    "KNN_Model_Predictions",
+    "Proportions+Latent_Classes+Polution_Sites",
+    paste("Model_Metrics_Summary.csv", sep = "")),
+  row.names = FALSE)
+```
+
+
+
+```{r Plots for Proportions Latent Classes and Pollution Sites, message = FALSE}
+#Create Directory for Model Plots
+if (dir.exists(here("KNN_Model_Predictions", "Proportions+Latent_Classes+Polution_Sites", "Plots")) == 
+    FALSE) {
+  dir.create(here("KNN_Model_Predictions", "Proportions+Latent_Classes+Polution_Sites", "Plots"))
+}
+
+#Cycle All Groups
+for (i in 1:length(Groups)) {
+  #Set the Group ID
+  Interest_Group <- Groups[i]
+  
+  #Plot True and Predicted Values for Group_05
+  Plot_Data <- read_csv(
+    here(
+      "KNN_Model_Predictions",
+      "Proportions+Latent_Classes+Polution_Sites",
+      Interest_Group,
+      paste("Test_Data_and_Predictions_", Interest_Group, ".csv",
+            sep = "")))
+  
+  #Order the Data by Mortality
+  Plot_Data <- Plot_Data[order(Plot_Data$Mortality),]
+  
+  #Create Column to Fill with Values
+  Plot_Data$Order <- NA
+  
+  #Add Column of Row Names
+  for (i in 1:nrow(Plot_Data)) {
+    Plot_Data$Order[i] <- i
+  }
+  
+  #Create Plot Showing Predictions with Real Values
+  print(
+    ggplot(data = Plot_Data,
+           aes(x = Order)) +
+      
+      #Plot Predictions
+      geom_point(
+        aes(y = Predictions),
+        shape = 21,
+        color = "cornflowerblue",
+        size = 0.5) +
+      
+      #Plot Real Values
+      geom_point(aes(y = Mortality),
+                 size = 0.5) +
+      
+      #Add Axis Labels
+      xlab("Data for Inticated Test Group Ordered by Increasing Observed Mortality") +
+      ylab("Mortality") +
+      
+      #Add Title
+      labs(
+        title = paste(
+          "Plot of Observed and Predicted Mortality for ",
+          Interest_Group,
+          " as the Test Set",
+          sep = ""),
+        
+        subtitle = paste(
+          "RMSE = ",
+          round(Model_Metrics$RMSE[which(Model_Metrics$Group == 
+                                               Interest_Group)], 4),
+          "     R-Squared = ",
+          round(Model_Metrics$R_Squared[which(Model_Metrics$Group == 
+                                                Interest_Group)], 4),
+          sep = "")))
+  
+  #Save the Plot
+  ggsave(
+    path = here("KNN_Model_Predictions", "Proportions+Latent_Classes+Polution_Sites", "Plots"),
+    filename = paste(
+      "Plot_of_Observed_and_Predicted_Mortality_for_",
+      Interest_Group,
+      ".jpg",
+      sep = ""
+    )
+  )
+}
+
+#Clear Model Metrics
+rm(Model_Metrics)
+```
+
+
+
+## Raw Data, Proportions, and Pollution Sites
+
+
+
+```{r KNN for Raw Data Proportions and Pollution Sites}
+#Subset the Needed Columns from the Analytic Data to Perform KNN Regression
+Working_Data <- Analytic_Data[, c(6, 7, 8:24, 25:41, 46)]
+
+
+#Create a List of the Groups
+Groups <-
+  unique(Analytic_Data$County.FIPS.Group)[
+    order(unique(Analytic_Data$County.FIPS.Group))]
+
+#Create Directory for Model Predictions if Needed
+if (dir.exists(here("KNN_Model_Predictions")) == FALSE) {
+  dir.create(here("KNN_Model_Predictions"))
+}
+
+if (dir.exists(here("KNN_Model_Predictions", "Raw_Data+Proportions+Polution_Sites")) == FALSE) {
+  dir.create(here("KNN_Model_Predictions", "Raw_Data+Proportions+Polution_Sites"))
+}
+
+
+
+#Cycle All Groups
+for (i in 1:length(Groups)) {
+  
+  #Create Directory to Store Results if Needed
+  if (dir.exists(here("KNN_Model_Predictions", "Raw_Data+Proportions+Polution_Sites",
+                      Groups[i])) == FALSE) {
+    dir.create(here("KNN_Model_Predictions", "Raw_Data+Proportions+Polution_Sites",
+                    Groups[i]))
+  }
+  
+  #Set the Group ID
+  Group <- Groups[i]
+  
+  if (file.exists(here(
+    "KNN_Model_Predictions",
+    "Raw_Data+Proportions+Polution_Sites",
+    Groups[i],
+    paste("Model_Output_", Group, ".txt", sep = ""))) == FALSE) {
+    
+    #Subset the Test Set, Features, and Response Values
+    Test <-
+      Working_Data[Working_Data$County.FIPS.Group == Group, -37]
+    
+    Test_Features <- subset(Test, select = -c(Mortality))
+
+    Test_Response <- subset(Test, select = Mortality)[, 1]
+    
+    #Subset the Training Set
+    Training <-
+      Working_Data[Working_Data$County.FIPS.Group != Group, -37]
+    
+    #Perform the KNN Regression
+    Model <- train(
+      Mortality ~ .,
+      data = Training,
+      tuneGrid = expand.grid(k = c(1, seq(5, 50, by = 5))),
+      trControl = trainControl(method = "cv", number = 10),
+      method = "knn",
+      preProcess = c("center", "scale"))
+    
+    #Set the Working Directory
+    setwd(here("KNN_Model_Predictions", "Raw_Data+Proportions+Polution_Sites", Groups[i]))
+    
+   
+    
+    #Call the Sink Function for the Model Output
+    sink(file = paste("Model_Output_", Group, ".txt", sep = ""))
+    
+    #Print the Model Output
+    print(Model)
+    
+    #End the Sink Function
+    sink()
+    
+    
+    
+    #Call the PDF Function
+    pdf(file = paste("Model_Plot_", Group, ".pdf", sep = ""))
+    
+    #Plot the Model Output
+    print(plot(Model))
+    
+    #End the PDF Function
+    dev.off()
+    
+    
+    
+    #Calculate Predictions for Test Set
+    Test$Group <- Group
+    Test$Predictions <- predict(Model, newdata = Test_Features)
+    
+    #Save the Test Set
+    write.csv(
+      Test,
+      file = here(
+        "KNN_Model_Predictions",
+        "Raw_Data+Proportions+Polution_Sites",
+        Groups[i],
+        paste("Test_Data_and_Predictions_", Group, ".csv", sep = "")),
+      row.names = FALSE)
+    
+    
+    
+    #Add Group to the Training Data
+    Training$Group <- Group
+    
+    #Save the Training Set
+    write.csv(
+      Training,
+      file = here(
+        "KNN_Model_Predictions",
+        "Raw_Data+Proportions+Polution_Sites",
+        Groups[i],
+        paste("Training_Data_", Group, ".csv", sep = "")),
+      row.names = FALSE)
+    
+    #Calculate Model Fit Metrics
+    Metrics <- data.frame(Group = Group,
+                          K = Model$bestTune,
+                          RMSE = sqrt(mean((Test_Response - Test$Predictions) ^ 2)),
+                          R_Squared = cor(Test_Response, Test$Predictions) ^ 2)
+    
+    #Save the Metrics
+    write.csv(
+      Metrics,
+      file = here(
+        "KNN_Model_Predictions",
+        "Raw_Data+Proportions+Polution_Sites",
+        Groups[i],
+        paste("Model_Metrics_", Group, ".csv", sep = "")),
+      row.names = FALSE)
+
+
+    
+    #Reset the Working Directory
+    setwd(here())
+    
+    
+    
+    #Create Model Metrics Summary if it Doesn't Exist
+    if (exists("Model_Metrics") == FALSE) {
+      Model_Metrics <-
+        read_csv(here(
+          "KNN_Model_Predictions",
+          "Raw_Data+Proportions+Polution_Sites",
+          Groups[i],
+          paste("Model_Metrics_", Group, ".csv", sep = "")))
+      
+    } else {
+      #Row Bind New Model Metrics in if Model Metrics Exists
+      Model_Metrics <- rbind(Model_Metrics, read_csv(here(
+        "KNN_Model_Predictions",
+        "Raw_Data+Proportions+Polution_Sites",
+        Groups[i],
+        paste("Model_Metrics_", Group, ".csv", sep = ""))))
+    }
+      
+  } else {
+  #If the Model Results alredy Exist  
+    #Create Model Metrics Summary in R if it Doesn't Exist
+    if (exists("Model_Metrics") == FALSE) {
+      Model_Metrics <-
+        read_csv(here(
+          "KNN_Model_Predictions",
+          "Raw_Data+Proportions+Polution_Sites",
+          Groups[i],
+          paste("Model_Metrics_", Group, ".csv", sep = "")))
+      
+    } else {
+      #Row Bind New Model Metrics in if Model Metrics Exists in R
+      Model_Metrics <- rbind(Model_Metrics, read_csv(here(
+        "KNN_Model_Predictions",
+        "Raw_Data+Proportions+Polution_Sites",
+        Groups[i],
+        paste("Model_Metrics_", Group, ".csv", sep = ""))))
+    }
+  }
+}
+
+#Save the Metrics Summary
+write.csv(
+  Model_Metrics,
+  file = here(
+    "KNN_Model_Predictions",
+    "Raw_Data+Proportions+Polution_Sites",
+    paste("Model_Metrics_Summary.csv", sep = "")),
+  row.names = FALSE)
+```
+
+
+
+```{r Plots for Raw Data Proportions and Pollution Sites, message = FALSE}
+#Create Directory for Model Plots
+if (dir.exists(here("KNN_Model_Predictions", "Raw_Data+Proportions+Polution_Sites", "Plots")) == 
+    FALSE) {
+  dir.create(here("KNN_Model_Predictions", "Raw_Data+Proportions+Polution_Sites", "Plots"))
+}
+
+#Cycle All Groups
+for (i in 1:length(Groups)) {
+  #Set the Group ID
+  Interest_Group <- Groups[i]
+  
+  #Plot True and Predicted Values for Group_05
+  Plot_Data <- read_csv(
+    here(
+      "KNN_Model_Predictions",
+      "Raw_Data+Proportions+Polution_Sites",
+      Interest_Group,
+      paste("Test_Data_and_Predictions_", Interest_Group, ".csv",
+            sep = "")))
+  
+  #Order the Data by Mortality
+  Plot_Data <- Plot_Data[order(Plot_Data$Mortality),]
+  
+  #Create Column to Fill with Values
+  Plot_Data$Order <- NA
+  
+  #Add Column of Row Names
+  for (i in 1:nrow(Plot_Data)) {
+    Plot_Data$Order[i] <- i
+  }
+  
+  #Create Plot Showing Predictions with Real Values
+  print(
+    ggplot(data = Plot_Data,
+           aes(x = Order)) +
+      
+      #Plot Predictions
+      geom_point(
+        aes(y = Predictions),
+        shape = 21,
+        color = "cornflowerblue",
+        size = 0.5) +
+      
+      #Plot Real Values
+      geom_point(aes(y = Mortality),
+                 size = 0.5) +
+      
+      #Add Axis Labels
+      xlab("Data for Inticated Test Group Ordered by Increasing Observed Mortality") +
+      ylab("Mortality") +
+      
+      #Add Title
+      labs(
+        title = paste(
+          "Plot of Observed and Predicted Mortality for ",
+          Interest_Group,
+          " as the Test Set",
+          sep = ""),
+        
+        subtitle = paste(
+          "RMSE = ",
+          round(Model_Metrics$RMSE[which(Model_Metrics$Group == 
+                                               Interest_Group)], 4),
+          "     R-Squared = ",
+          round(Model_Metrics$R_Squared[which(Model_Metrics$Group == 
+                                                Interest_Group)], 4),
+          sep = "")))
+  
+  #Save the Plot
+  ggsave(
+    path = here("KNN_Model_Predictions", "Raw_Data+Proportions+Polution_Sites", "Plots"),
+    filename = paste(
+      "Plot_of_Observed_and_Predicted_Mortality_for_",
+      Interest_Group,
+      ".jpg",
+      sep = ""
+    )
+  )
+}
+
+#Clear Model Metrics
+rm(Model_Metrics)
+```
+
+
+
+
+
+
+
+
+
+# CV-Bootstrap KNN Regressions
+
+
+## Raw Data, Proportions, Latent Classes, and Polution Sites
+
+```{r Bootstrap KNN for Raw Data Proportions Latent Classes and Polution Sites}
+#Subset the Needed Columns from the Analytic Data to Perform KNN Regression
+Working_Data <- Analytic_Data[, c(6, 7, 8:24, 25:41, 44:45, 46)]
+
+
+#Create a List of the Groups
+Groups <-
+  unique(Analytic_Data$County.FIPS.Group)[
+    order(unique(Analytic_Data$County.FIPS.Group))]
+
+#Create Directory for Model Predictions if Needed
+if (dir.exists(here("KNN_Model_Predictions")) == FALSE) {
+  dir.create(here("KNN_Model_Predictions"))
+}
+
+if (dir.exists(
+  here("KNN_Model_Predictions", 
+       "Bootstrap")) == FALSE) {
+  dir.create(
+    here("KNN_Model_Predictions", 
+         "Bootstrap"))
+}
+
+if (dir.exists(
+  here("KNN_Model_Predictions", 
+       "Bootstrap",
+       "Raw_Data+Proportions+Latent_Classes+Polution_Sites")) == FALSE) {
+  dir.create(
+    here("KNN_Model_Predictions", 
+         "Bootstrap",
+         "Raw_Data+Proportions+Latent_Classes+Polution_Sites"))
+}
+
+
+
+#Run for Group 1 Only
+for (i in 1:1) {
+  
+  #Create Directory to Store Results if Needed
+  if (dir.exists(
+    here("KNN_Model_Predictions", 
+         "Bootstrap",
+         "Raw_Data+Proportions+Latent_Classes+Polution_Sites",
+                      Groups[i])) == FALSE) {
+    dir.create(
+      here("KNN_Model_Predictions", 
+           "Bootstrap",
+           "Raw_Data+Proportions+Latent_Classes+Polution_Sites",
+                    Groups[i]))
+  }
+  
+  #Set the Group ID
+  Group <- Groups[i]
+  
+  if (file.exists(here(
+    "KNN_Model_Predictions",
+    "Bootstrap",
+    "Raw_Data+Proportions+Latent_Classes+Polution_Sites",
+    Groups[i],
+    paste("Model_Output_", Group, ".txt", sep = ""))) == FALSE) {
+    
+
+    
+    #Subset the Training Set
+    Training <-
+      Working_Data[Working_Data$County.FIPS.Group != Group, -39]
+    
+    #Perform the KNN Regression
+    Model <- train(
+      Mortality ~ .,
+      data = Training,
+      tuneGrid = expand.grid(k = c(1, seq(5, 100, by = 5))),
+      trControl = trainControl(method = "cv", number = 10),
+      method = "knn",
+      preProcess = c("center", "scale"))
+    
+    #Set the Working Directory
+    setwd(here("KNN_Model_Predictions", 
+               "Bootstrap",
+               "Raw_Data+Proportions+Latent_Classes+Polution_Sites", 
+               Groups[i]))
+    
+   
+    
+    #Call the Sink Function for the Model Output
+    sink(file = paste("Model_Output_", Group, ".txt", sep = ""))
+    
+    #Print the Model Output
+    print(Model)
+    
+    #End the Sink Function
+    sink()
+    
+    
+    
+    #Call the PDF Function
+    pdf(file = paste("Model_Plot_", Group, ".pdf", sep = ""))
+    
+    #Plot the Model Output
+    print(plot(Model))
+    
+    #End the PDF Function
+    dev.off()
+    
+    
+    
+    #Add Group to the Training Data
+    Training$Group <- Group
+    
+    #Save the Training Set
+    write.csv(
+      Training,
+      file = here(
+        "KNN_Model_Predictions",
+        "Bootstrap",
+        "Raw_Data+Proportions+Latent_Classes+Polution_Sites",
+        Groups[i],
+        paste("Training_Data_", Group, ".csv", sep = "")),
+      row.names = FALSE)
+    
+    
+    
+    #Subset the Test Set, Features, and Response Values
+    Test <-
+      Working_Data[Working_Data$County.FIPS.Group == Group, -39]
+    
+    #Reset the Test Set Row Names
+    rownames(Test) <- NULL
+    
+    #Create Lists to Store Values
+    Group_Name <- c()
+    Resampling <- c()
+    K <- c()
+    RMSE <- c()
+    R_Squared <- c()
+    
+    #Perform Bootstrapping
+    for (Sampling in 1:100) {
+      
+    #Bootstrap the Test Set
+    Bootstrap <- Test[sample(nrow(Test), nrow(Test), replace = TRUE), ]   
+
+    Test_Features <- subset(Bootstrap, select = -c(Mortality))
+
+    Test_Response <- subset(Bootstrap, select = Mortality)[, 1]       
+    
+    #Calculate Predictions for Test Set
+    Bootstrap$Group <- Group
+    Bootstrap$Predictions <- predict(Model, newdata = Test_Features)
+    
+    #Populate Lists with Values
+    Group_Name <- append(Group_Name, Group)
+    Resampling <- append(Resampling, Sampling)
+    K <- append(K, Model$bestTune)
+    RMSE <- append(RMSE, sqrt(mean((Test_Response - 
+                                              Bootstrap$Predictions) ^ 2)))
+    R_Squared <- append(R_Squared, cor(Test_Response, 
+                                          Bootstrap$Predictions) ^ 2)
+    }
+    
+    #Calculate Model Fit Metrics
+    Metrics <- data.frame(Group = Group_Name,
+                          Resampling = Resampling,
+                          K = c(unlist(K)),
+                          RMSE = RMSE,
+                          R_Squared = R_Squared)
+    
+    #Save the Metrics
+    write.csv(
+      Metrics,
+      file = here(
+        "KNN_Model_Predictions",
+        "Bootstrap",
+        "Raw_Data+Proportions+Latent_Classes+Polution_Sites",
+        Groups[i],
+        paste("Model_Metrics_", Group, ".csv", sep = "")),
+      row.names = FALSE)
+
+
+    
+    #Reset the Working Directory
+    setwd(here())
+    
+    
+    
+
+      
+  }
+}
+
+#Calculate the Means
+Model_Metrics <-
+  data.frame(
+    Group = "Group_01",
+    K = mean(Metrics$K),
+    RMSE = mean(Metrics$RMSE),
+    R_Squared = mean(Metrics$R_Squared))
+
+#Save the Metrics Summary
+write.csv(
+  Model_Metrics,
+  file = here(
+    "KNN_Model_Predictions",
+    "Bootstrap",
+    "Raw_Data+Proportions+Latent_Classes+Polution_Sites",
+    paste("Mean_Model_Metrics_Summary.csv", sep = "")),
+  row.names = FALSE)
+```
+
+
+
+
+
+
+## Raw Data, Latent Classes, and Polution Sites
+
+```{r Bootstrap KNN for Raw Data Latent Classes and Polution Sites}
+#Subset the Needed Columns from the Analytic Data to Perform KNN Regression
+Working_Data <- Analytic_Data[, c(6, 7, 25:41, 44:45, 46)]
+
+
+#Create a List of the Groups
+Groups <-
+  unique(Analytic_Data$County.FIPS.Group)[
+    order(unique(Analytic_Data$County.FIPS.Group))]
+
+#Create Directory for Model Predictions if Needed
+if (dir.exists(here("KNN_Model_Predictions")) == FALSE) {
+  dir.create(here("KNN_Model_Predictions"))
+}
+
+if (dir.exists(
+  here("KNN_Model_Predictions", 
+       "Bootstrap")) == FALSE) {
+  dir.create(
+    here("KNN_Model_Predictions", 
+         "Bootstrap"))
+}
+
+if (dir.exists(
+  here("KNN_Model_Predictions", 
+       "Bootstrap",
+       "Raw_Data+Latent_Classes+Polution_Sites")) == FALSE) {
+  dir.create(
+    here("KNN_Model_Predictions", 
+         "Bootstrap",
+         "Raw_Data+Latent_Classes+Polution_Sites"))
+}
+
+
+
+#Run for Group 1 Only
+for (i in 1:1) {
+  
+  #Create Directory to Store Results if Needed
+  if (dir.exists(
+    here("KNN_Model_Predictions", 
+         "Bootstrap",
+         "Raw_Data+Latent_Classes+Polution_Sites",
+                      Groups[i])) == FALSE) {
+    dir.create(
+      here("KNN_Model_Predictions", 
+           "Bootstrap",
+           "Raw_Data+Latent_Classes+Polution_Sites",
+                    Groups[i]))
+  }
+  
+  #Set the Group ID
+  Group <- Groups[i]
+  
+  if (file.exists(here(
+    "KNN_Model_Predictions",
+    "Bootstrap",
+    "Raw_Data+Latent_Classes+Polution_Sites",
+    Groups[i],
+    paste("Model_Output_", Group, ".txt", sep = ""))) == FALSE) {
+    
+
+    
+    #Subset the Training Set
+    Training <-
+      Working_Data[Working_Data$County.FIPS.Group != Group, -39]
+    
+    #Perform the KNN Regression
+    Model <- train(
+      Mortality ~ .,
+      data = Training,
+      tuneGrid = expand.grid(k = c(1, seq(5, 100, by = 5))),
+      trControl = trainControl(method = "cv", number = 10),
+      method = "knn",
+      preProcess = c("center", "scale"))
+    
+    #Set the Working Directory
+    setwd(here("KNN_Model_Predictions", 
+               "Bootstrap",
+               "Raw_Data+Latent_Classes+Polution_Sites", 
+               Groups[i]))
+    
+   
+    
+    #Call the Sink Function for the Model Output
+    sink(file = paste("Model_Output_", Group, ".txt", sep = ""))
+    
+    #Print the Model Output
+    print(Model)
+    
+    #End the Sink Function
+    sink()
+    
+    
+    
+    #Call the PDF Function
+    pdf(file = paste("Model_Plot_", Group, ".pdf", sep = ""))
+    
+    #Plot the Model Output
+    print(plot(Model))
+    
+    #End the PDF Function
+    dev.off()
+    
+    
+    
+    #Add Group to the Training Data
+    Training$Group <- Group
+    
+    #Save the Training Set
+    write.csv(
+      Training,
+      file = here(
+        "KNN_Model_Predictions",
+        "Bootstrap",
+        "Raw_Data+Latent_Classes+Polution_Sites",
+        Groups[i],
+        paste("Training_Data_", Group, ".csv", sep = "")),
+      row.names = FALSE)
+    
+    
+    
+    #Subset the Test Set, Features, and Response Values
+    Test <-
+      Working_Data[Working_Data$County.FIPS.Group == Group, -39]
+    
+    #Reset the Test Set Row Names
+    rownames(Test) <- NULL
+    
+    #Create Lists to Store Values
+    Group_Name <- c()
+    Resampling <- c()
+    K <- c()
+    RMSE <- c()
+    R_Squared <- c()
+    
+    #Perform Bootstrapping
+    for (Sampling in 1:100) {
+      
+    #Bootstrap the Test Set
+    Bootstrap <- Test[sample(nrow(Test), nrow(Test), replace = TRUE), ]   
+
+    Test_Features <- subset(Bootstrap, select = -c(Mortality))
+
+    Test_Response <- subset(Bootstrap, select = Mortality)[, 1]       
+    
+    #Calculate Predictions for Test Set
+    Bootstrap$Group <- Group
+    Bootstrap$Predictions <- predict(Model, newdata = Test_Features)
+    
+    #Populate Lists with Values
+    Group_Name <- append(Group_Name, Group)
+    Resampling <- append(Resampling, Sampling)
+    K <- append(K, Model$bestTune)
+    RMSE <- append(RMSE, sqrt(mean((Test_Response - 
+                                              Bootstrap$Predictions) ^ 2)))
+    R_Squared <- append(R_Squared, cor(Test_Response, 
+                                          Bootstrap$Predictions) ^ 2)
+    }
+    
+    #Calculate Model Fit Metrics
+    Metrics <- data.frame(Group = Group_Name,
+                          Resampling = Resampling,
+                          K = c(unlist(K)),
+                          RMSE = RMSE,
+                          R_Squared = R_Squared)
+    
+    #Save the Metrics
+    write.csv(
+      Metrics,
+      file = here(
+        "KNN_Model_Predictions",
+        "Bootstrap",
+        "Raw_Data+Latent_Classes+Polution_Sites",
+        Groups[i],
+        paste("Model_Metrics_", Group, ".csv", sep = "")),
+      row.names = FALSE)
+
+
+    
+    #Reset the Working Directory
+    setwd(here())
+    
+    
+    
+
+      
+  }
+}
+
+#Calculate the Means
+Model_Metrics <-
+  data.frame(
+    Group = "Group_01",
+    K = mean(Metrics$K),
+    RMSE = mean(Metrics$RMSE),
+    R_Squared = mean(Metrics$R_Squared))
+
+#Save the Metrics Summary
+write.csv(
+  Model_Metrics,
+  file = here(
+    "KNN_Model_Predictions",
+    "Bootstrap",
+    "Raw_Data+Latent_Classes+Polution_Sites",
+    paste("Mean_Model_Metrics_Summary.csv", sep = "")),
+  row.names = FALSE)
+```
+
+
+
+
+
+
+## Proportions, Latent Classes, and Polution Sites
+
+```{r Bootstrap KNN for Proportions Latent Classes and Polution Sites}
+#Subset the Needed Columns from the Analytic Data to Perform KNN Regression
+Working_Data <- Analytic_Data[, c(6, 7, 8:24, 44:45, 46)]
+
+
+#Create a List of the Groups
+Groups <-
+  unique(Analytic_Data$County.FIPS.Group)[
+    order(unique(Analytic_Data$County.FIPS.Group))]
+
+#Create Directory for Model Predictions if Needed
+if (dir.exists(here("KNN_Model_Predictions")) == FALSE) {
+  dir.create(here("KNN_Model_Predictions"))
+}
+
+if (dir.exists(
+  here("KNN_Model_Predictions", 
+       "Bootstrap")) == FALSE) {
+  dir.create(
+    here("KNN_Model_Predictions", 
+         "Bootstrap"))
+}
+
+if (dir.exists(
+  here("KNN_Model_Predictions", 
+       "Bootstrap",
+       "Proportions+Latent_Classes+Polution_Sites")) == FALSE) {
+  dir.create(
+    here("KNN_Model_Predictions", 
+         "Bootstrap",
+         "Proportions+Latent_Classes+Polution_Sites"))
+}
+
+
+
+#Run for Group 1 Only
+for (i in 1:1) {
+  
+  #Create Directory to Store Results if Needed
+  if (dir.exists(
+    here("KNN_Model_Predictions", 
+         "Bootstrap",
+         "Proportions+Latent_Classes+Polution_Sites",
+                      Groups[i])) == FALSE) {
+    dir.create(
+      here("KNN_Model_Predictions", 
+           "Bootstrap",
+           "Proportions+Latent_Classes+Polution_Sites",
+                    Groups[i]))
+  }
+  
+  #Set the Group ID
+  Group <- Groups[i]
+  
+  if (file.exists(here(
+    "KNN_Model_Predictions",
+    "Bootstrap",
+    "Proportions+Latent_Classes+Polution_Sites",
+    Groups[i],
+    paste("Model_Output_", Group, ".txt", sep = ""))) == FALSE) {
+    
+
+    
+    #Subset the Training Set
+    Training <-
+      Working_Data[Working_Data$County.FIPS.Group != Group, -39]
+    
+    #Perform the KNN Regression
+    Model <- train(
+      Mortality ~ .,
+      data = Training,
+      tuneGrid = expand.grid(k = c(1, seq(5, 100, by = 5))),
+      trControl = trainControl(method = "cv", number = 10),
+      method = "knn",
+      preProcess = c("center", "scale"))
+    
+    #Set the Working Directory
+    setwd(here("KNN_Model_Predictions", 
+               "Bootstrap",
+               "Proportions+Latent_Classes+Polution_Sites", 
+               Groups[i]))
+    
+   
+    
+    #Call the Sink Function for the Model Output
+    sink(file = paste("Model_Output_", Group, ".txt", sep = ""))
+    
+    #Print the Model Output
+    print(Model)
+    
+    #End the Sink Function
+    sink()
+    
+    
+    
+    #Call the PDF Function
+    pdf(file = paste("Model_Plot_", Group, ".pdf", sep = ""))
+    
+    #Plot the Model Output
+    print(plot(Model))
+    
+    #End the PDF Function
+    dev.off()
+    
+    
+    
+    #Add Group to the Training Data
+    Training$Group <- Group
+    
+    #Save the Training Set
+    write.csv(
+      Training,
+      file = here(
+        "KNN_Model_Predictions",
+        "Bootstrap",
+        "Proportions+Latent_Classes+Polution_Sites",
+        Groups[i],
+        paste("Training_Data_", Group, ".csv", sep = "")),
+      row.names = FALSE)
+    
+    
+    
+    #Subset the Test Set, Features, and Response Values
+    Test <-
+      Working_Data[Working_Data$County.FIPS.Group == Group, -39]
+    
+    #Reset the Test Set Row Names
+    rownames(Test) <- NULL
+    
+    #Create Lists to Store Values
+    Group_Name <- c()
+    Resampling <- c()
+    K <- c()
+    RMSE <- c()
+    R_Squared <- c()
+    
+    #Perform Bootstrapping
+    for (Sampling in 1:100) {
+      
+    #Bootstrap the Test Set
+    Bootstrap <- Test[sample(nrow(Test), nrow(Test), replace = TRUE), ]   
+
+    Test_Features <- subset(Bootstrap, select = -c(Mortality))
+
+    Test_Response <- subset(Bootstrap, select = Mortality)[, 1]       
+    
+    #Calculate Predictions for Test Set
+    Bootstrap$Group <- Group
+    Bootstrap$Predictions <- predict(Model, newdata = Test_Features)
+    
+    #Populate Lists with Values
+    Group_Name <- append(Group_Name, Group)
+    Resampling <- append(Resampling, Sampling)
+    K <- append(K, Model$bestTune)
+    RMSE <- append(RMSE, sqrt(mean((Test_Response - 
+                                              Bootstrap$Predictions) ^ 2)))
+    R_Squared <- append(R_Squared, cor(Test_Response, 
+                                          Bootstrap$Predictions) ^ 2)
+    }
+    
+    #Calculate Model Fit Metrics
+    Metrics <- data.frame(Group = Group_Name,
+                          Resampling = Resampling,
+                          K = c(unlist(K)),
+                          RMSE = RMSE,
+                          R_Squared = R_Squared)
+    
+    #Save the Metrics
+    write.csv(
+      Metrics,
+      file = here(
+        "KNN_Model_Predictions",
+        "Bootstrap",
+        "Proportions+Latent_Classes+Polution_Sites",
+        Groups[i],
+        paste("Model_Metrics_", Group, ".csv", sep = "")),
+      row.names = FALSE)
+
+
+    
+    #Reset the Working Directory
+    setwd(here())
+    
+    
+    
+
+      
+  }
+}
+
+#Calculate the Means
+Model_Metrics <-
+  data.frame(
+    Group = "Group_01",
+    K = mean(Metrics$K),
+    RMSE = mean(Metrics$RMSE),
+    R_Squared = mean(Metrics$R_Squared))
+
+#Save the Metrics Summary
+write.csv(
+  Model_Metrics,
+  file = here(
+    "KNN_Model_Predictions",
+    "Bootstrap",
+    "Proportions+Latent_Classes+Polution_Sites",
+    paste("Mean_Model_Metrics_Summary.csv", sep = "")),
+  row.names = FALSE)
+```
+
+
+
+
+
+
+## Raw Data, Proportions, and Polution Sites
+
+```{r Bootstrap KNN for Raw Data Proportions and Polution Sites}
+#Subset the Needed Columns from the Analytic Data to Perform KNN Regression
+Working_Data <- Analytic_Data[, c(6, 7, 8:24, 25:41, 46)]
+
+
+#Create a List of the Groups
+Groups <-
+  unique(Analytic_Data$County.FIPS.Group)[
+    order(unique(Analytic_Data$County.FIPS.Group))]
+
+#Create Directory for Model Predictions if Needed
+if (dir.exists(here("KNN_Model_Predictions")) == FALSE) {
+  dir.create(here("KNN_Model_Predictions"))
+}
+
+if (dir.exists(
+  here("KNN_Model_Predictions", 
+       "Bootstrap")) == FALSE) {
+  dir.create(
+    here("KNN_Model_Predictions", 
+         "Bootstrap"))
+}
+
+if (dir.exists(
+  here("KNN_Model_Predictions", 
+       "Bootstrap",
+       "Raw_Data+Proportions+Polution_Sites")) == FALSE) {
+  dir.create(
+    here("KNN_Model_Predictions", 
+         "Bootstrap",
+         "Raw_Data+Proportions+Polution_Sites"))
+}
+
+
+
+#Run for Group 1 Only
+for (i in 1:1) {
+  
+  #Create Directory to Store Results if Needed
+  if (dir.exists(
+    here("KNN_Model_Predictions", 
+         "Bootstrap",
+         "Raw_Data+Proportions+Polution_Sites",
+                      Groups[i])) == FALSE) {
+    dir.create(
+      here("KNN_Model_Predictions", 
+           "Bootstrap",
+           "Raw_Data+Proportions+Polution_Sites",
+                    Groups[i]))
+  }
+  
+  #Set the Group ID
+  Group <- Groups[i]
+  
+  if (file.exists(here(
+    "KNN_Model_Predictions",
+    "Bootstrap",
+    "Raw_Data+Proportions+Polution_Sites",
+    Groups[i],
+    paste("Model_Output_", Group, ".txt", sep = ""))) == FALSE) {
+    
+
+    
+    #Subset the Training Set
+    Training <-
+      Working_Data[Working_Data$County.FIPS.Group != Group, -39]
+    
+    #Perform the KNN Regression
+    Model <- train(
+      Mortality ~ .,
+      data = Training,
+      tuneGrid = expand.grid(k = c(1, seq(5, 100, by = 5))),
+      trControl = trainControl(method = "cv", number = 10),
+      method = "knn",
+      preProcess = c("center", "scale"))
+    
+    #Set the Working Directory
+    setwd(here("KNN_Model_Predictions", 
+               "Bootstrap",
+               "Raw_Data+Proportions+Polution_Sites", 
+               Groups[i]))
+    
+   
+    
+    #Call the Sink Function for the Model Output
+    sink(file = paste("Model_Output_", Group, ".txt", sep = ""))
+    
+    #Print the Model Output
+    print(Model)
+    
+    #End the Sink Function
+    sink()
+    
+    
+    
+    #Call the PDF Function
+    pdf(file = paste("Model_Plot_", Group, ".pdf", sep = ""))
+    
+    #Plot the Model Output
+    print(plot(Model))
+    
+    #End the PDF Function
+    dev.off()
+    
+    
+    
+    #Add Group to the Training Data
+    Training$Group <- Group
+    
+    #Save the Training Set
+    write.csv(
+      Training,
+      file = here(
+        "KNN_Model_Predictions",
+        "Bootstrap",
+        "Raw_Data+Proportions+Polution_Sites",
+        Groups[i],
+        paste("Training_Data_", Group, ".csv", sep = "")),
+      row.names = FALSE)
+    
+    
+    
+    #Subset the Test Set, Features, and Response Values
+    Test <-
+      Working_Data[Working_Data$County.FIPS.Group == Group, -39]
+    
+    #Reset the Test Set Row Names
+    rownames(Test) <- NULL
+    
+    #Create Lists to Store Values
+    Group_Name <- c()
+    Resampling <- c()
+    K <- c()
+    RMSE <- c()
+    R_Squared <- c()
+    
+    #Perform Bootstrapping
+    for (Sampling in 1:100) {
+      
+    #Bootstrap the Test Set
+    Bootstrap <- Test[sample(nrow(Test), nrow(Test), replace = TRUE), ]   
+
+    Test_Features <- subset(Bootstrap, select = -c(Mortality))
+
+    Test_Response <- subset(Bootstrap, select = Mortality)[, 1]       
+    
+    #Calculate Predictions for Test Set
+    Bootstrap$Group <- Group
+    Bootstrap$Predictions <- predict(Model, newdata = Test_Features)
+    
+    #Populate Lists with Values
+    Group_Name <- append(Group_Name, Group)
+    Resampling <- append(Resampling, Sampling)
+    K <- append(K, Model$bestTune)
+    RMSE <- append(RMSE, sqrt(mean((Test_Response - 
+                                              Bootstrap$Predictions) ^ 2)))
+    R_Squared <- append(R_Squared, cor(Test_Response, 
+                                          Bootstrap$Predictions) ^ 2)
+    }
+    
+    #Calculate Model Fit Metrics
+    Metrics <- data.frame(Group = Group_Name,
+                          Resampling = Resampling,
+                          K = c(unlist(K)),
+                          RMSE = RMSE,
+                          R_Squared = R_Squared)
+    
+    #Save the Metrics
+    write.csv(
+      Metrics,
+      file = here(
+        "KNN_Model_Predictions",
+        "Bootstrap",
+        "Raw_Data+Proportions+Polution_Sites",
+        Groups[i],
+        paste("Model_Metrics_", Group, ".csv", sep = "")),
+      row.names = FALSE)
+
+
+    
+    #Reset the Working Directory
+    setwd(here())
+    
+    
+    
+
+      
+  }
+}
+
+#Calculate the Means
+Model_Metrics <-
+  data.frame(
+    Group = "Group_01",
+    K = mean(Metrics$K),
+    RMSE = mean(Metrics$RMSE),
+    R_Squared = mean(Metrics$R_Squared))
+
+#Save the Metrics Summary
+write.csv(
+  Model_Metrics,
+  file = here(
+    "KNN_Model_Predictions",
+    "Bootstrap",
+    "Raw_Data+Proportions+Polution_Sites",
+    paste("Mean_Model_Metrics_Summary.csv", sep = "")),
+  row.names = FALSE)
+```

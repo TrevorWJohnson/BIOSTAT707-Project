@@ -1,0 +1,25 @@
+k-Nearest Neighbors 
+
+66639 samples
+   20 predictor
+
+Pre-processing: centered (20), scaled (20) 
+Resampling: Cross-Validated (10 fold) 
+Summary of sample sizes: 59976, 59976, 59975, 59973, 59976, 59974, ... 
+Resampling results across tuning parameters:
+
+  k   RMSE      Rsquared    MAE     
+   1  3.928967  0.05359861  2.841568
+   5  3.086193  0.11461331  2.331095
+  10  2.976078  0.13673769  2.253649
+  15  2.945039  0.14527234  2.231668
+  20  2.933845  0.14864632  2.224584
+  25  2.931757  0.14881049  2.225123
+  30  2.931911  0.14834339  2.226490
+  35  2.933333  0.14746019  2.227883
+  40  2.936318  0.14572506  2.231252
+  45  2.938638  0.14445237  2.233576
+  50  2.939332  0.14416328  2.235159
+
+RMSE was used to select the optimal model using the smallest value.
+The final value used for the model was k = 25.
